@@ -75,7 +75,7 @@ const quickActions = computed(() => [
   {
     to: '/admin/users',
     icon: Setting, // 或 User
-    title: '用户管理中心',
+    title: '请假审批中心',
     description: '管理系统用户账户及权限设置。',
     show: isAdmin.value,
     type: 'danger' // 只是示例颜色，可以自定义

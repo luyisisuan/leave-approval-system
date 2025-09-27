@@ -2,7 +2,7 @@
 
 ## 1. 项目概述
 
-本后端服务是 **请假审批系统** 的核心 API 组件，基于 **Spring Boot (v3.4.5)** 构建。它采用 **Java** (请指定版本, 如 17/21) 编程语言，并利用 **Spring Security** 和 **JWT (JSON Web Tokens)** 实现安全的认证与授权机制。数据持久化依赖 **Spring Data JPA** 和 **Hibernate**，后端数据库采用 **MySQL**。
+本后端服务是 **请假审批系统** 的核心 API 组件，基于 **Spring Boot (v3.4.5)** 构建。它采用 **Java**17，并利用 **Spring Security** 和 **JWT (JSON Web Tokens)** 实现安全的认证与授权机制。数据持久化依赖 **Spring Data JPA** 和 **Hibernate**，后端数据库采用 **MySQL**。
 
 该服务旨在为前端应用提供一套完整、安全且高效的 RESTful API 接口，支持包括用户管理、请假申请提交与处理、以及基于职责链和状态模式的复杂审批工作流。
 
@@ -66,9 +66,9 @@ _(API端点路径和具体参数请参考自动生成的API文档)_
 
 ### 4.1. 前提条件
 
-*   Java Development Kit (JDK) - 版本 [请指定您的版本, 如 17 或 21]
-*   Apache Maven - 版本 3.6.x 或更高
-*   MySQL Server - 版本 5.7.x 或 8.x
+*   Java Development Kit (JDK) - 版本 17
+*   Apache Maven - 版本 3.6.2
+*   MySQL Server - 版本 5.7.1
 
 ### 4.2. 应用配置
 

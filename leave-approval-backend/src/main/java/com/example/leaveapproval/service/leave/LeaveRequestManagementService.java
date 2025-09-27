@@ -75,4 +75,7 @@ public interface LeaveRequestManagementService {
      */
     Page<LeaveRequestViewDto> adminGetAllPendingRequests(LeaveStatus status, Pageable pageable); // <<--- 新增此方法
 
+
+    Page<LeaveRequestViewDto> getPendingApprovals(User currentUser, Pageable pageable);
+
 }

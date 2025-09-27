@@ -74,105 +74,98 @@ public class LeaveRequestManagementServiceImpl implements LeaveRequestManagement
         return createdLeaveRequest;
     }
 
+    /**
+     * [重要] 此方法已被完全重构，以支持Admin的通用审批权限。
+     * Admin可以代表当前指定的审批人执行操作，绕过权限检查。
+     */
     @Override
     public LeaveRequestViewDto processApprovalAction(Long leaveRequestId, ApprovalActionDto actionDto, Long approverUserId) {
-        logger.info("用户ID {} 尝试处理请假申请ID {}，决定：{}，意见：'{}'",
-                approverUserId, leaveRequestId, actionDto.getDecision(), actionDto.getComments());
+        logger.info("用户ID {} 正在尝试处理请假申请ID {}，决定：{}",
+                approverUserId, leaveRequestId, actionDto.getDecision());
 
         LeaveRequest leaveRequest = leaveRequestRepository.findById(leaveRequestId)
-                .orElseThrow(() -> {
-                    logger.warn("处理审批操作失败：未找到请假申请ID {}", leaveRequestId);
-                    return new ResourceNotFoundException("LeaveRequest", "id", leaveRequestId);
-                });
+                .orElseThrow(() -> new ResourceNotFoundException("LeaveRequest", "id", leaveRequestId));
 
-        User actionTakingApprover = userRepository.findById(approverUserId)
-                .orElseThrow(() -> {
-                    logger.warn("处理审批操作失败：未找到执行操作的用户ID {}", approverUserId);
-                    return new ResourceNotFoundException("User (Approver)", "id", approverUserId);
-                });
+        User actionTakingUser = userRepository.findById(approverUserId)
+                .orElseThrow(() -> new ResourceNotFoundException("User (Approver)", "id", approverUserId));
 
-        LeaveState currentLeaveState = leaveRequest.getCurrentState();
+        // 集中进行Admin角色检查
+        boolean isAdminAction = actionTakingUser.getRoles().contains(Role.ROLE_ADMIN);
 
-        try {
-            if (actionDto.getDecision() == ApprovalHistory.Decision.APPROVED) {
-                logger.debug("调用 LeaveRequest ID {} 的当前状态 {} 的 approve 方法进行前置处理。", leaveRequestId, currentLeaveState.getStatusEnum());
-                currentLeaveState.approve(leaveRequest, actionTakingApprover, actionDto.getDecision(), actionDto.getComments());
-            } else if (actionDto.getDecision() == ApprovalHistory.Decision.REJECTED) {
-                logger.debug("调用 LeaveRequest ID {} 的当前状态 {} 的 reject 方法进行前置处理。", leaveRequestId, currentLeaveState.getStatusEnum());
-                currentLeaveState.reject(leaveRequest, actionTakingApprover, actionDto.getDecision(), actionDto.getComments());
-            } else {
-                logger.warn("在 processApprovalAction 中收到非 APPROVED/REJECTED 的审批决定类型: {}，请假ID: {}",
-                        actionDto.getDecision(), leaveRequestId);
-                throw new IllegalArgumentException("无效的审批操作决定类型: " + actionDto.getDecision() + "。请使用专门的取消接口（如果适用）。");
-            }
-        } catch (IllegalStateException e) {
-            logger.warn("请假申请 ID {} 的当前状态 {} 不允许执行 {} 操作：{}",
-                    leaveRequestId, currentLeaveState.getStatusEnum(), actionDto.getDecision(), e.getMessage());
-            throw e;
-        }
+        // 获取当前流程指定的审批人
+        User designatedApprover = leaveRequest.getCurrentApprover();
 
-        boolean isAdminAction = actionTakingApprover.getRoles().contains(Role.ROLE_ADMIN);
-        boolean isCurrentUserAssignedApprover = (leaveRequest.getCurrentApprover() != null &&
-                leaveRequest.getCurrentApprover().getId().equals(actionTakingApprover.getId()));
-
-        if (!isAdminAction && !isCurrentUserAssignedApprover) {
-            String currentApproverUsername = leaveRequest.getCurrentApprover() != null ? leaveRequest.getCurrentApprover().getUsername() : "未指定";
-            String errorMsg = String.format("权限不足：用户 %s 不是请假申请 %d 的当前指定审批人 (%s) 且不具备越级审批权限。",
-                    actionTakingApprover.getUsername(), leaveRequestId, currentApproverUsername);
+        // 重构后的权限检查逻辑：
+        // 规则：如果操作者不是Admin，那么他必须是当前指定的审批人。
+        if (!isAdminAction && (designatedApprover == null || !designatedApprover.getId().equals(actionTakingUser.getId()))) {
+            String designatedApproverUsername = designatedApprover != null ? designatedApprover.getUsername() : "未指定";
+            String errorMsg = String.format("权限不足：用户 '%s' 不是请假申请 %d 的当前指定审批人 ('%s')。",
+                    actionTakingUser.getUsername(), designatedApproverUsername, leaveRequestId);
             logger.warn(errorMsg);
             throw new IllegalStateException(errorMsg);
         }
 
-        User designatedApproverForNode = leaveRequest.getCurrentApprover();
-        if (designatedApproverForNode == null && leaveRequest.getStatusEnum() == LeaveStatus.PENDING_APPROVAL) {
+        // 处理审批链中断的特殊情况：申请在待审批，但没有指定审批人。只有Admin能处理。
+        if (designatedApprover == null && leaveRequest.getStatusEnum() == LeaveStatus.PENDING_APPROVAL) {
             if (isAdminAction) {
-                designatedApproverForNode = actionTakingApprover;
-                logger.warn("请假申请 {} 状态为 PENDING_APPROVAL 但无当前审批人，Admin {} 将尝试代表节点处理。",
-                        leaveRequestId, actionTakingApprover.getUsername());
+                logger.warn("请假申请 {} 处于待审批状态但无指定审批人。Admin '{}' 将接管处理。",
+                        leaveRequestId, actionTakingUser.getUsername());
+                // 在这种特殊情况下，我们将Admin视为“名义上的”指定审批人，以便找到正确的审批节点
+                designatedApprover = actionTakingUser;
             } else {
-                logger.error("请假申请 {} 状态为 PENDING_APPROVAL 但没有指定的当前审批人，且操作者非Admin，无法处理。", leaveRequestId);
-                throw new IllegalStateException("请假申请 " + leaveRequestId + " 处于待审批状态但没有指定的当前审批人，无法处理。");
+                String errorMsg = String.format("系统错误：请假申请 %d 处于待审批状态但没有指定审批人，非Admin无法处理。", leaveRequestId);
+                logger.error(errorMsg);
+                throw new IllegalStateException(errorMsg);
             }
-        } else if (designatedApproverForNode == null && leaveRequest.getStatusEnum() != LeaveStatus.PENDING_APPROVAL) {
-            if (isAdminAction) {
-                designatedApproverForNode = actionTakingApprover;
-                logger.warn("请假申请 {} 状态为 {} 且无当前审批人，Admin {} 将尝试代表节点处理。",
-                        leaveRequestId, leaveRequest.getStatusEnum(), actionTakingApprover.getUsername());
-            } else {
-                logger.error("请假申请 {} 状态为 {} 且无当前审批人，非Admin用户无法操作。", leaveRequestId, leaveRequest.getStatusEnum());
-                throw new IllegalStateException("请假申请 " + leaveRequestId + " 当前状态 ("+ leaveRequest.getStatusEnum() +") 或配置不允许此操作。");
-            }
+        } else if (designatedApprover == null) {
+            // 其他状态下如果没有指定审批人，说明流程已结束或异常
+            String errorMsg = String.format("系统错误：请假申请 %d 状态为 %s 且无指定审批人，无法处理。",
+                    leaveRequestId, leaveRequest.getStatusEnum());
+            logger.error(errorMsg);
+            throw new IllegalStateException(errorMsg);
         }
 
-        Approver approverNode = getApproverNodeForUser(designatedApproverForNode);
+        // 状态转换逻辑保持不变
+        LeaveState currentLeaveState = leaveRequest.getCurrentState();
+        try {
+            if (actionDto.getDecision() == ApprovalHistory.Decision.APPROVED) {
+                currentLeaveState.approve(leaveRequest, actionTakingUser, actionDto.getDecision(), actionDto.getComments());
+            } else if (actionDto.getDecision() == ApprovalHistory.Decision.REJECTED) {
+                currentLeaveState.reject(leaveRequest, actionTakingUser, actionDto.getDecision(), actionDto.getComments());
+            } else {
+                throw new IllegalArgumentException("无效的审批操作决定类型: " + actionDto.getDecision());
+            }
+        } catch (IllegalStateException e) {
+            logger.warn("为请假申请 {} 执行状态转换失败: {}", leaveRequestId, e.getMessage());
+            throw e;
+        }
+
+        // 始终基于“指定审批人”来查找审批节点，以确保执行正确的业务逻辑
+        Approver approverNode = getApproverNodeForUser(designatedApprover);
+
         if (approverNode == null) {
-            String designatedApproverInfo = (designatedApproverForNode != null) ?
-                    String.format("%s (ID: %d, 角色: %s)", designatedApproverForNode.getUsername(), designatedApproverForNode.getId(), designatedApproverForNode.getRoles())
-                    : "未指定审批人";
+            // 如果仍然找不到节点，说明系统配置有误
+            String designatedApproverInfo = String.format("%s (ID: %d, 角色: %s)",
+                    designatedApprover.getUsername(), designatedApprover.getId(), designatedApprover.getRoles());
             String errorMsg = String.format(
                     "系统错误：无法为当前应审批用户 %s 找到对应的审批处理者配置。请假ID: %d",
-                    designatedApproverInfo, leaveRequestId
-            );
+                    designatedApproverInfo, leaveRequestId);
             logger.error(errorMsg);
             throw new IllegalStateException(errorMsg);
         }
 
         try {
-            approverNode.handleApprovalAction(leaveRequest, actionTakingApprover, actionDto.getDecision(), actionDto.getComments());
-            logger.info("请假申请 ID: {} 的审批操作已由 {} (ID: {}) 代表节点 {} (角色匹配自 {}) 处理完成。",
-                    leaveRequestId, actionTakingApprover.getUsername(), actionTakingApprover.getId(),
-                    approverNode.getClass().getSimpleName(),
-                    designatedApproverForNode != null ? designatedApproverForNode.getUsername() : "系统/Admin");
+            // 关键：让 Admin (actionTakingUser) 去执行“指定审批人”节点的业务逻辑。
+            approverNode.handleApprovalAction(leaveRequest, actionTakingUser, actionDto.getDecision(), actionDto.getComments());
+            logger.info("请假申请 ID {} 已由用户 '{}' 代表审批节点 '{}' 成功处理。",
+                    leaveRequestId, actionTakingUser.getUsername(), approverNode.getClass().getSimpleName());
         } catch (IllegalStateException | IllegalArgumentException e) {
-            logger.warn("请假申请 ID: {} 的审批操作在职责链环节失败：{}", leaveRequestId, e.getMessage(), e);
+            logger.error("在责任链环节处理请假申请 {} 失败: {}", leaveRequestId, e.getMessage(), e);
             throw e;
         }
 
         LeaveRequest updatedRequest = leaveRequestRepository.findById(leaveRequestId)
-                .orElseThrow(() -> {
-                    logger.error("严重错误：处理审批后无法重新获取请假申请 {}。", leaveRequestId);
-                    return new InternalError("严重错误：处理审批后无法重新获取请假申请 " + leaveRequestId + "。");
-                });
+                .orElseThrow(() -> new InternalError("严重错误：处理审批后无法重新获取请假申请 " + leaveRequestId));
 
         return populateLeaveRequestViewDto(updatedRequest);
     }
@@ -189,8 +182,9 @@ public class LeaveRequestManagementServiceImpl implements LeaveRequestManagement
         } else if (user.getRoles().contains(Role.ROLE_TEAM_LEAD)) {
             return applicationContext.getBean("teamLeadApprover", Approver.class);
         }
-        if (user.getRoles().size() == 1 && user.getRoles().contains(Role.ROLE_ADMIN)) {
-            logger.info("为纯Admin角色 {} 指定HR审批节点作为入口。", user.getUsername());
+        // 如果用户只有Admin角色（比如修复中断的流程时），可以默认给他一个高权限节点（如HR）作为入口
+        if (user.getRoles().contains(Role.ROLE_ADMIN)) {
+            logger.info("为Admin角色 {} 指定HR审批节点作为入口以处理流程。", user.getUsername());
             return applicationContext.getBean("hrApprover", Approver.class);
         }
         logger.warn("用户 {} (ID: {}) 具有角色 {}，但没有匹配的特定审批处理者节点配置用于启动审批链。如果操作者是Admin，其权限仍将在审批链内部处理。",
@@ -237,8 +231,6 @@ public class LeaveRequestManagementServiceImpl implements LeaveRequestManagement
     @Transactional(readOnly = true)
     public Page<LeaveRequestViewDto> getMyLeaveRequests(Long applicantId, Pageable pageable) {
         logger.debug("用户ID {} 查询我的请假申请，分页：{}", applicantId, pageable);
-        // userRepository.findById(applicantId) // 这行不是必须的，除非你要校验用户存在
-        //         .orElseThrow(() -> new ResourceNotFoundException("User (Applicant)", "id", applicantId));
         return leaveRequestRepository.findByApplicantId(applicantId, pageable)
                 .map(this::populateLeaveRequestViewDto);
     }
@@ -248,10 +240,26 @@ public class LeaveRequestManagementServiceImpl implements LeaveRequestManagement
     public Page<LeaveRequestViewDto> getPendingApprovalRequestsForUser(Long approverId, LeaveStatus status, Pageable pageable) {
         LeaveStatus queryStatus = (status == null) ? LeaveStatus.PENDING_APPROVAL : status;
         logger.debug("审批人ID {} 查询状态为 {} 的请假申请列表，分页：{}", approverId, queryStatus, pageable);
-        // userRepository.findById(approverId) // 这行不是必须的，除非你要校验用户存在
-        //        .orElseThrow(() -> new ResourceNotFoundException("User (Approver)", "id", approverId));
         return leaveRequestRepository.findByCurrentApproverIdAndStatusEnum(approverId, queryStatus, pageable)
                 .map(this::populateLeaveRequestViewDto);
+    }
+
+    // 新增方法：统一的待审批列表获取入口
+    @Override
+    @Transactional(readOnly = true)
+    public Page<LeaveRequestViewDto> getPendingApprovals(User currentUser, Pageable pageable) {
+        // 判断当前用户是否拥有Admin角色
+        boolean isAdmin = currentUser.getRoles().contains(Role.ROLE_ADMIN);
+
+        if (isAdmin) {
+            logger.info("Admin用户 {} 正在获取所有待审批的申请列表。", currentUser.getUsername());
+            // 如果是Admin，调用已有的方法获取所有待审批申请
+            return adminGetAllPendingRequests(LeaveStatus.PENDING_APPROVAL, pageable);
+        } else {
+            logger.info("普通用户 {} 正在获取分配给TA的待审批申请列表。", currentUser.getUsername());
+            // 如果是普通用户，执行原逻辑，只查找分配给自己的申请
+            return getPendingApprovalRequestsForUser(currentUser.getId(), LeaveStatus.PENDING_APPROVAL, pageable);
+        }
     }
 
     @Override
@@ -259,7 +267,6 @@ public class LeaveRequestManagementServiceImpl implements LeaveRequestManagement
     public Page<LeaveRequestViewDto> adminGetAllPendingRequests(LeaveStatus status, Pageable pageable) {
         LeaveStatus queryStatus = (status == null) ? LeaveStatus.PENDING_APPROVAL : status;
         logger.info("Admin 操作：获取所有状态为 {} 的请假申请，分页：{}", queryStatus, pageable);
-        // 更正点：使用 Repository 中定义的 findByStatusEnum
         return leaveRequestRepository.findByStatusEnum(queryStatus, pageable)
                 .map(this::populateLeaveRequestViewDto);
     }
@@ -268,7 +275,6 @@ public class LeaveRequestManagementServiceImpl implements LeaveRequestManagement
         if (leaveRequest == null) return null;
         LeaveRequestViewDto dto = LeaveRequestViewDto.fromEntity(leaveRequest);
         if (dto != null) {
-            // 更正点：使用 Repository 中定义的 findByLeaveRequestOrderByApprovedAtAsc
             List<ApprovalHistory> histories = approvalHistoryRepository.findByLeaveRequestOrderByApprovedAtAsc(leaveRequest);
             dto.setApprovalHistory(
                     histories.stream()

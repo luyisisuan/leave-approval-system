@@ -166,6 +166,8 @@ const resetFullFormState = () => {
                 :prefix-icon="User"
                 clearable
                 size="large"
+                name="username"
+                autocomplete="username"
               />
             </el-form-item>
           </el-col>
@@ -177,6 +179,8 @@ const resetFullFormState = () => {
                 :prefix-icon="InfoFilled"
                 clearable
                 size="large"
+                name="email"
+                autocomplete="email"
               />
             </el-form-item>
           </el-col>
@@ -193,6 +197,8 @@ const resetFullFormState = () => {
                 show-password
                 clearable
                 size="large"
+                name="new-password"
+                autocomplete="new-password"
               />
             </el-form-item>
           </el-col>
@@ -206,6 +212,8 @@ const resetFullFormState = () => {
                 show-password
                 clearable
                 size="large"
+                name="confirm-new-password"
+                autocomplete="new-password"
               />
             </el-form-item>
           </el-col>
@@ -218,6 +226,8 @@ const resetFullFormState = () => {
             :prefix-icon="Tickets"
             clearable
             size="large"
+            name="name"
+            autocomplete="name"
           />
         </el-form-item>
 
@@ -231,6 +241,7 @@ const resetFullFormState = () => {
             style="width: 100%;"
             :loading="isLoadingManagers"
             :prefix-icon="OfficeBuilding"
+            autocomplete="off"
           >
             <el-option
               v-for="manager in managers"

@@ -72,7 +72,7 @@ const activeMenuIndex = computed(() => route.path);
       <template v-if="authStore.isAuthenticated">
         <el-menu-item index="/dashboard">
           <el-icon><House /></el-icon>
-          <span>仪表盘</span>
+          <span>导航栏</span>
         </el-menu-item>
         <el-menu-item index="/submit-leave">
           <el-icon><DocumentAdd /></el-icon>

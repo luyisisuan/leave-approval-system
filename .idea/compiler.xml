@@ -22,6 +22,9 @@
   </component>
   <component name="JavacSettings">
     <option name="ADDITIONAL_OPTIONS_OVERRIDE">
+      <module name="demo" options="-parameters" />
+      <module name="demo.main" options="-parameters" />
+      <module name="demo.test" options="-parameters" />
       <module name="leave-approval-backend" options="-parameters" />
     </option>
   </component>

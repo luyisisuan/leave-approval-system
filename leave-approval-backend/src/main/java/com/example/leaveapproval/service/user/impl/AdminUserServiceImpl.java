@@ -1,10 +1,13 @@
+// 文件路径: com/example/leaveapproval/service/user/impl/AdminUserServiceImpl.java
+// (请用以下全部代码替换原有文件内容)
+
 package com.example.leaveapproval.service.user.impl;
 
 import com.example.leaveapproval.dto.AdminUserCreateRequest;
 import com.example.leaveapproval.dto.UserDto;
 import com.example.leaveapproval.dto.UserUpdateRequest;
 import com.example.leaveapproval.exception.ResourceNotFoundException;
-import com.example.leaveapproval.model.Role; // 新增：导入 Role 枚举
+import com.example.leaveapproval.model.Role;
 import com.example.leaveapproval.model.User;
 import com.example.leaveapproval.repository.UserRepository;
 import com.example.leaveapproval.service.user.AdminUserService;
@@ -19,17 +22,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
-import java.util.Comparator; // 新增：导入 Comparator
-import java.util.HashSet;   // 新增：导入 HashSet
-import java.util.List;      // 新增：导入 List
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Optional;
-import java.util.Set;       // 新增：导入 Set
-import java.util.stream.Collectors; // 新增：导入 Collectors
+import java.util.Set;
+import java.util.stream.Collectors;
 
-/**
- * {@link AdminUserService} 接口的实现类。
- * 提供了管理员管理用户账户的具体业务逻辑。
- */
 @Service
 @Transactional
 public class AdminUserServiceImpl implements AdminUserService {
@@ -45,13 +44,20 @@ public class AdminUserServiceImpl implements AdminUserService {
         this.passwordEncoder = passwordEncoder;
     }
 
+    /**
+     * [已修改] 获取用户列表，默认只显示活动用户 (enabled = true)。
+     */
     @Override
     @Transactional(readOnly = true)
     public Page<UserDto> getAllUsers(Pageable pageable) {
-        logger.info("管理员操作：获取所有用户，分页参数：{}", pageable);
-        return userRepository.findAll(pageable).map(UserDto::fromEntity);
+        logger.info("管理员操作：获取所有活动状态的用户，分页参数：{}", pageable);
+        // 修改 userRepository.findAll 为 findByEnabled(true, ...)，只查找活动用户
+        return userRepository.findByEnabled(true, pageable).map(UserDto::fromEntity);
     }
 
+    /**
+     * [保持不变] 管理员应能通过ID获取任何用户，包括非活动用户。
+     */
     @Override
     @Transactional(readOnly = true)
     public Optional<UserDto> getUserById(Long id) {
@@ -59,6 +65,9 @@ public class AdminUserServiceImpl implements AdminUserService {
         return userRepository.findById(id).map(UserDto::fromEntity);
     }
 
+    /**
+     * [保持不变] 创建用户逻辑。
+     */
     @Override
     public UserDto createUser(AdminUserCreateRequest createRequest) {
         logger.info("管理员操作：尝试创建新用户，用户名：{}", createRequest.getUsername());
@@ -100,13 +109,16 @@ public class AdminUserServiceImpl implements AdminUserService {
         }
 
         user.setRoles(createRequest.getRoles());
-        user.setEnabled(true);
+        user.setEnabled(true); // 新用户默认为启用状态
 
         User savedUser = userRepository.save(user);
         logger.info("管理员操作：用户创建成功，用户ID：{}", savedUser.getId());
         return UserDto.fromEntity(savedUser);
     }
 
+    /**
+     * [保持不变] 更新用户逻辑，管理员可以更新任何用户，包括重新启用(enabled: true)已禁用的用户。
+     */
     @Override
     public Optional<UserDto> updateUser(Long id, UserUpdateRequest updateRequest) {
         logger.info("管理员操作：尝试更新用户，用户ID：{}", id);
@@ -151,11 +163,10 @@ public class AdminUserServiceImpl implements AdminUserService {
                     user.setManager(manager);
                     isModified = true;
                 }
-            } else if (updateRequest.getManagerId() == null && user.getManager() != null) { // 注意这里是 else if
+            } else if (updateRequest.getManagerId() == null && user.getManager() != null) {
                 user.setManager(null);
                 isModified = true;
             }
-
 
             if (updateRequest.getRoles() != null && !updateRequest.getRoles().isEmpty()) {
                 if (!user.getRoles().equals(updateRequest.getRoles())) {
@@ -183,25 +194,40 @@ public class AdminUserServiceImpl implements AdminUserService {
             }
         });
     }
+
+    /**
+     * [重要修改] 实现逻辑删除 (Soft Delete)。
+     * 不再从数据库物理删除用户，而是将其 enabled 状态更新为 false。
+     */
     @Override
     public void deleteUser(Long id) {
-        logger.info("管理员操作：尝试删除用户，用户ID：{}", id);
-        if (!userRepository.existsById(id)) {
-            String errorMessage = "错误：尝试删除的用户 (ID: " + id + ") 不存在。";
-            logger.warn(errorMessage);
-            throw new ResourceNotFoundException("User", "id", id);
-        }
-        userRepository.deleteById(id);
-        logger.info("管理员操作：用户删除成功，用户ID：{}", id);
+        logger.info("管理员操作：尝试禁用（逻辑删除）用户，用户ID：{}", id);
+
+        // 1. 查找用户，如果不存在则抛出异常
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> {
+                    String errorMessage = "错误：尝试禁用的用户 (ID: " + id + ") 不存在。";
+                    logger.warn(errorMessage);
+                    return new ResourceNotFoundException("User", "id", id);
+                });
+
+        // 2. 将用户的 enabled 状态设置为 false
+        user.setEnabled(false);
+
+        // 3. 保存更新后的用户状态
+        userRepository.save(user);
+
+        logger.info("管理员操作：用户禁用（逻辑删除）成功，用户ID：{}", id);
     }
 
-    // --- 新增方法实现 ---
+    /**
+     * [已修改] 获取经理列表，确保只返回活动状态的经理 (enabled = true)。
+     */
     @Override
-    @Transactional(readOnly = true) // 这是一个只读操作
+    @Transactional(readOnly = true)
     public List<UserDto> getPotentialManagers() {
-        logger.info("获取所有潜在的经理用户列表。");
+        logger.info("获取所有活动状态的潜在经理用户列表。");
 
-        // 定义哪些角色可以被视为经理角色
         Set<Role> managerRoles = Set.of(
                 Role.ROLE_TEAM_LEAD,
                 Role.ROLE_DEPT_MANAGER,
@@ -209,30 +235,17 @@ public class AdminUserServiceImpl implements AdminUserService {
                 Role.ROLE_ADMIN
         );
 
-        // 使用一个 Set 来存储用户，以自动处理因用户拥有多个经理角色而可能产生的重复
         Set<User> potentialManagersSet = new HashSet<>();
 
-        // 遍历定义的经理角色，并从 userRepository 获取拥有这些角色的用户
         for (Role role : managerRoles) {
-            // 假设 userRepository.findByRolesContaining(role) 返回 List<User>
-            // 并且 User 类正确实现了 equals 和 hashCode 方法（Lombok @Data 通常会正确生成）
-            // 以便 Set<User> 能够正确去重。
             potentialManagersSet.addAll(userRepository.findByRolesContaining(role));
         }
 
-        // 将 User 实体集合转换为 UserDto 列表，并按姓名排序
         return potentialManagersSet.stream()
-                .map(user -> {
-                    // 使用 UserDto.fromEntity 转换，确保 UserDto 中包含所需信息
-                    // 如果 UserDto.fromEntity 不符合这里的需求（例如，不需要 managerId, managerUsername），
-                    // 你可以在这里手动创建和填充 UserDto。
-                    // 为了保持一致性，并假设 UserDto.fromEntity 已包含足够的信息（如id, fullName, username, roles），我们直接使用它。
-                    UserDto dto = UserDto.fromEntity(user);
-                    // 如果希望在DTO中明确角色信息，确保UserDto.fromEntity会填充roles字段
-                    return dto;
-                })
-                .sorted(Comparator.comparing(UserDto::getFullName, String.CASE_INSENSITIVE_ORDER)) // 按全名不区分大小写排序
+                // 新增过滤器：只包含 enabled 状态为 true 的用户
+                .filter(User::isEnabled)
+                .map(UserDto::fromEntity)
+                .sorted(Comparator.comparing(UserDto::getFullName, String.CASE_INSENSITIVE_ORDER))
                 .collect(Collectors.toList());
     }
-    // --- 新增方法实现结束 ---
 }
